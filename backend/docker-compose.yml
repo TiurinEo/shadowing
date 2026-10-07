@@ -1,0 +1,11 @@
+services:
+  shadowing:
+    build: .
+    container_name: shadowing
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/models:ro
