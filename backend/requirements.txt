@@ -1,0 +1,5 @@
+fastapi
+uvicorn[standard]
+youtube-transcript-api>=1.0
+python-multipart
+faster-whisper
