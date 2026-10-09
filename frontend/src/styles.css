@@ -73,3 +73,18 @@ input { width: 100%; padding: 14px; border: 1px solid var(--line); border-radius
 .hist b { font-weight: 400; font-size: 15px; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .hist small { color: var(--mute); font-size: 12px; }
 .hist .ghost { font-size: 22px; padding: 8px 12px; }
+
+/* --- кнопки и блоки --- */
+.steps.two { grid-template-columns: 1fr 1fr; }
+.steps button { min-height: 68px; }
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; margin: 10px 0; transition: opacity .2s; }
+.panel.off { opacity: .55; }
+.panel h3 { display: flex; gap: 8px; align-items: baseline; margin: 0 0 10px; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--mute); font-weight: 400; }
+.seg { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 8px; }
+.btn { min-height: 48px; padding: 10px 6px; font-size: 15px; white-space: nowrap; background: #fff; border: 1px solid #c9c2b4; border-radius: 12px; box-shadow: 0 2px 0 #c9c2b4; }
+.btn:active:not(:disabled) { transform: translateY(2px); box-shadow: none; }
+.btn.main { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 2px 0 #164a47; }
+.btn.active { background: var(--rec); border-color: var(--rec); color: #fff; box-shadow: 0 2px 0 #8f3109; }
+.btn.wide { width: 100%; font-size: 16px; }
+.hint { margin: 8px 0 0; font-size: 13px; color: var(--mute); }
+.panel .verdict { margin: 12px 2px 0; }

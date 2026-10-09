@@ -43,10 +43,13 @@ export default function App() {
   const [history, setHistory] = useState(loadHistory); // [{ videoId, url, lang, title, idx, ts }]
   const [status, setStatus] = useState("idle"); // idle | listening | recording | comparing
   const [recs, setRecs] = useState({}); // id -> { url, blob }
+  const [cmode, setCmode] = useState(null); // какой вариант Compare сейчас играет
   const [checks, setChecks] = useState({}); // id -> { loading | result | error }
 
   const playerRef = useRef(null);
   const timerRef = useRef(null);
+  const runRef = useRef(0); // «номер запуска»: отмена увеличивает его
+  const cancelRef = useRef(null);
   const recorderRef = useRef(null);
   const audioRef = useRef(null);
   const listRef = useRef(null);
@@ -129,18 +132,25 @@ export default function App() {
   }, [idx]);
 
   function stopAll() {
+    runRef.current++;
     clearInterval(timerRef.current);
     playerRef.current?.pauseVideo?.();
-    if (audioRef.current) audioRef.current.pause();
+    if (audioRef.current) {
+      audioRef.current.onended = null;
+      audioRef.current.pause();
+    }
     if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    cancelRef.current?.(); // освобождаем ожидающие промисы
+    cancelRef.current = null;
   }
 
-  // Играет оригинал [start, end]; возвращает промис, который резолвится в конце фрагмента
+  // Играет оригинал [start, end]; резолвится в конце фрагмента или при отмене
   function playOriginal(s) {
     return new Promise((resolve) => {
       const p = playerRef.current;
       if (!p?.seekTo) return resolve();
       clearInterval(timerRef.current);
+      cancelRef.current = resolve;
       p.seekTo(s.start, true);
       p.playVideo();
       timerRef.current = setInterval(() => {
@@ -153,12 +163,18 @@ export default function App() {
     });
   }
 
-  // ---------- 1. Listen ----------
+  // ---------- 1. Listen (повторное нажатие = стоп) ----------
   async function listen() {
+    if (status === "listening") {
+      stopAll();
+      setStatus("idle");
+      return;
+    }
     stopAll();
+    const token = runRef.current;
     setStatus("listening");
     await playOriginal(cur);
-    setStatus("idle");
+    if (token === runRef.current) setStatus("idle");
   }
 
   // ---------- 2. Record ----------
@@ -210,6 +226,7 @@ export default function App() {
   function playMine() {
     return new Promise((resolve) => {
       const a = audioRef.current;
+      cancelRef.current = resolve;
       a.onended = resolve;
       a.onerror = resolve;
       a.currentTime = 0;
@@ -217,22 +234,34 @@ export default function App() {
     });
   }
 
+  // повторное нажатие на активную кнопку = стоп
   async function compare(mode) {
+    if (status === "comparing") {
+      stopAll();
+      setStatus("idle");
+      return;
+    }
     const rec = recs[cur.id];
     if (!rec) return;
     stopAll();
+    const token = runRef.current;
+    const alive = () => token === runRef.current;
+    setCmode(mode);
     setStatus("comparing");
     try {
       await unlockAudio(rec.url);
+      if (!alive()) return;
       if (mode === "orig") await playOriginal(cur);
       else if (mode === "mine") await playMine();
       else {
         await playOriginal(cur);
+        if (!alive()) return;
         await new Promise((r) => setTimeout(r, 250));
+        if (!alive()) return;
         await playMine();
       }
     } finally {
-      setStatus("idle");
+      if (alive()) setStatus("idle");
     }
   }
 
@@ -325,7 +354,7 @@ export default function App() {
   return (
     <main className="train">
       <header>
-        <button className="ghost" onClick={() => { stopAll(); setData(null); }}>Назад</button>
+        <button className="ghost" onClick={() => { stopAll(); setStatus("idle"); setData(null); }}>Назад</button>
         <span>{idx + 1} / {sentences.length}</span>
         {data.generated && <span className="tag" title="Автосубтитры: границы могут быть неточными">авто</span>}
       </header>
@@ -354,34 +383,48 @@ export default function App() {
         </div>
       </section>
 
-      <section className="steps">
+      <section className="steps two">
         <button onClick={listen} disabled={status === "recording" || status === "comparing"} className={status === "listening" ? "active" : ""}>
-          <b>1</b> Listen
+          <b>1</b> {status === "listening" ? "■ Stop" : "▶ Listen"}
         </button>
         <button onClick={toggleRecord} disabled={status === "listening" || status === "comparing"} className={"rec " + (status === "recording" ? "active" : "")}>
-          <b>2</b> {status === "recording" ? "Stop" : rec ? "Re-record" : "Record"}
-        </button>
-        <button onClick={() => compare("both")} disabled={!rec || busy} className={status === "comparing" ? "active" : ""}>
-          <b>3</b> Compare
+          <b>2</b> {status === "recording" ? "■ Stop" : rec ? "● Re-record" : "● Record"}
         </button>
       </section>
 
-      {rec && (
-        <div className="ab">
-          <button className="ghost" disabled={busy} onClick={() => compare("orig")}>Только оригинал</button>
-          <button className="ghost" disabled={busy} onClick={() => compare("mine")}>Только я</button>
-          <button className="ghost" disabled={busy || chk?.loading} onClick={check}>
-            {chk?.loading ? "Слушаю…" : "Проверить произношение"}
-          </button>
+      <section className={"panel" + (rec ? "" : " off")}>
+        <h3><b>3</b> Compare</h3>
+        <div className="seg">
+          {[["both", "Оба подряд"], ["orig", "Оригинал"], ["mine", "Я"]].map(([m, label]) => {
+            const on = status === "comparing" && cmode === m;
+            return (
+              <button
+                key={m}
+                className={"btn " + (m === "both" ? "main " : "") + (on ? "active" : "")}
+                disabled={!rec || (busy && !on)}
+                onClick={() => compare(m)}
+              >
+                {on ? "■ Стоп" : "▶ " + label}
+              </button>
+            );
+          })}
         </div>
-      )}
-      {chk?.result && (
-        <div className="verdict">
-          <b>{chk.result.score}%</b>
-          <span>Whisper услышал: «{chk.result.heard || "ничего"}»</span>
-        </div>
-      )}
-      {chk?.error && <p className="err">{chk.error}</p>}
+        {!rec && <p className="hint">Сначала запишите свой голос</p>}
+      </section>
+
+      <section className={"panel" + (rec ? "" : " off")}>
+        <h3>Проверка произношения</h3>
+        <button className="btn wide" disabled={!rec || busy || chk?.loading} onClick={check}>
+          {chk?.loading ? "Слушаю…" : "Проверить через Whisper"}
+        </button>
+        {chk?.result && (
+          <div className="verdict">
+            <b>{chk.result.score}%</b>
+            <span>Whisper услышал: «{chk.result.heard || "ничего"}»</span>
+          </div>
+        )}
+        {chk?.error && <p className="err">{chk.error}</p>}
+      </section>
 
       {error && <p className="err">{error}</p>}
 
