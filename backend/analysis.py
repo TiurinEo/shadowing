@@ -23,6 +23,27 @@ def _get(d, *names, default=None):
     return default
 
 
+def _find(o, name, depth=0):
+    """Последняя надежда: ищет ключ на любой глубине, но не внутри Words (там оценки слов, а не фразы)."""
+    if depth > 4:
+        return None
+    if isinstance(o, dict):
+        v = _get(o, name)
+        if v is not None:
+            return v
+        for k, x in o.items():
+            if k.lower() != "words":
+                r = _find(x, name, depth + 1)
+                if r is not None:
+                    return r
+    elif isinstance(o, list):
+        for x in o[:3]:
+            r = _find(x, name, depth + 1)
+            if r is not None:
+                return r
+    return None
+
+
 def num(v):
     """Число из числа или строки вида '12.3', '85%', '4.2 syl/s'."""
     if isinstance(v, bool):
@@ -86,13 +107,22 @@ def pronunciation_view(resp: dict, text: str, locale: str) -> dict:
 
     nbest = _get(resp, "NBest")
     best = nbest[0] if isinstance(nbest, list) and nbest else {}
-    scores_src = _get(best, "PronunciationAssessment") or resp
+    # Оценки бывают вложены в PronunciationAssessment (JSON Speech SDK) или лежат прямо в NBest[0] / в корне (Azure REST).
+    sources = [_get(best, "PronunciationAssessment"), best, _get(resp, "PronunciationAssessment"), resp]
+
+    def score(name):
+        for src in sources:
+            v = num(_get(src, name))
+            if v is not None:
+                return v
+        return num(_find(resp, name))
+
     scores = {
-        "accuracy": num(_get(scores_src, "AccuracyScore")),
-        "fluency": num(_get(scores_src, "FluencyScore")),
-        "completeness": num(_get(scores_src, "CompletenessScore")),
-        "prosody": num(_get(scores_src, "ProsodyScore")),
-        "pron": num(_get(scores_src, "PronScore")),
+        "accuracy": score("AccuracyScore"),
+        "fluency": score("FluencyScore"),
+        "completeness": score("CompletenessScore"),
+        "prosody": score("ProsodyScore"),
+        "pron": score("PronScore"),
     }
     aw = _words(best, resp)
     if all(v is None for v in scores.values()) and not aw:
@@ -121,7 +151,8 @@ def pronunciation_view(resp: dict, text: str, locale: str) -> dict:
         else:
             et = w["errorType"]
             status = "omission" if et == "Omission" else "mispronunciation" if et == "Mispronunciation" else _band(w["score"])
-            out_words.append({"t": t, "status": status, "score": w["score"], "errorType": et, "phonemes": w["phonemes"]})
+            out_words.append({"t": t, "status": status, "score": w["score"], "errorType": et, "phonemes": w["phonemes"],
+                              "offset": w["offset"], "duration": w["duration"]})
 
     # Вставки (лишние слова) привязываем к предыдущему слову текста
     tok_of = {id(w): i for i, w in mapping.items()}

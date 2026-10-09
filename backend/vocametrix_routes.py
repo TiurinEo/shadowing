@@ -3,7 +3,7 @@ import logging
 import re
 import threading
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 
 import audio
 import vocametrix as vm
@@ -134,4 +134,48 @@ def prosody(
         finally:
             client.close()
 
+    return _run(work)
+
+
+# ---------- оригинал: звук и тайминги слов ----------
+_orig_words: dict[tuple, dict] = {}
+_orig_lock = threading.Lock()
+
+
+@router.get("/original-audio")
+def original_audio(video_id: str, start: float, end: float):
+    """WAV-фрагмент оригинала — браузер режет из него отдельные слова."""
+    def work():
+        wav, _ = audio.original_fragment(video_id, start, end)
+        return Response(wav, media_type="audio/wav", headers={"Cache-Control": "private, max-age=3600"})
+    return _run(work)
+
+
+@router.post("/original-words")
+def original_words(video_id: str = Form(...), start: float = Form(...), end: float = Form(...), text: str = Form(...), lang: str = Form("en")):
+    """Тайминги слов в оригинале: тот же Pronunciation Assessment, но по фрагменту оригинала (2 запроса к API, результат кэшируется)."""
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text or len(text) > MAX_TEXT:
+        raise HTTPException(400, detail=_err("bad_request", "Пустой или слишком длинный текст фрагмента", False))
+    locale = to_locale(lang)
+    key = (video_id, round(start, 2), round(end, 2), text, locale)
+
+    def work():
+        with _orig_lock:
+            hit = _orig_words.get(key)
+        if hit:
+            return hit
+        client = _client()
+        try:
+            vm.guard.check(vm.ANALYSIS_COST["pronunciation"])
+            wav, _ = audio.original_fragment(video_id, start, end)
+            view = pronunciation_view(client.assess_pronunciation(wav, text, locale), text, locale)
+        finally:
+            client.close()
+        out = {"words": [{"offset": w.get("offset"), "duration": w.get("duration")} for w in view["words"]]}
+        with _orig_lock:
+            if len(_orig_words) > 256:
+                _orig_words.clear()
+            _orig_words[key] = out
+        return out
     return _run(work)

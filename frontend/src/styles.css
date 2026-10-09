@@ -133,3 +133,7 @@ input { width: 100%; padding: 14px; border: 1px solid var(--line); border-radius
 .vmerr .btn { width: 100%; }
 .more { margin-top: 8px; font-size: 13px; color: var(--mute); }
 .more summary { cursor: pointer; }
+
+.wplay { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+.wplay .btn { min-height: 42px; font-size: 14px; }
+.wplay .hint, .wplay .err { grid-column: 1 / -1; margin: 0; }

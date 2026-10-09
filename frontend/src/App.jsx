@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import VocametrixPanel, { AnnotatedSentence } from "./Analysis.jsx";
+import VocametrixPanel, { AnnotatedSentence, stopWord } from "./Analysis.jsx";
 
 // ---------- YouTube IFrame API ----------
 let ytReady;
@@ -139,6 +139,7 @@ export default function App() {
   }, [idx]);
 
   function stopAll() {
+    stopWord();
     runRef.current++;
     clearInterval(timerRef.current);
     playerRef.current?.pauseVideo?.();
@@ -468,7 +469,12 @@ export default function App() {
 
       <section className="card">
         {vmr?.pron?.result ? (
-          <AnnotatedSentence key={cur.id} result={vmr.pron.result} />
+          <AnnotatedSentence
+            key={cur.id}
+            result={vmr.pron.result}
+            userBlob={rec?.blob}
+            origReq={{ videoId: data.videoId, start: cur.start, end: cur.end, text: cur.text, lang: data.lang }}
+          />
         ) : (
           <p className="sentence">
             {chk?.result

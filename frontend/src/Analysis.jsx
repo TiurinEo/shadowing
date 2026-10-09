@@ -12,8 +12,111 @@ const STATUS_LABEL = {
   unknown: "нет оценки для этого слова",
 };
 
+
+// ---------- звук отдельных слов ----------
+// Запись пользователя и фрагмент оригинала декодируются в AudioBuffer, слово вырезается по Offset/Duration (секунды).
+const BASE = import.meta.env.BASE_URL;
+let actx = null;
+let curSrc = null;
+let playRun = 0;
+const getCtx = () => (actx ||= new (window.AudioContext || window.webkitAudioContext)());
+const decode = (ab) => new Promise((res, rej) => getCtx().decodeAudioData(ab, res, rej)); // callback-форма — для старого Safari
+const userBufs = new WeakMap();
+const origBufs = new Map();
+const origWordsCache = new Map();
+
+function cached(map, key, make) {
+  if (!map.has(key)) map.set(key, make().catch((e) => { map.delete(key); throw e; }));
+  return map.get(key);
+}
+
+const userBuffer = (blob) => cached(userBufs, blob, async () => decode(await blob.arrayBuffer()));
+const origKey = (q) => [q.videoId, q.start, q.end].join("|");
+const origBuffer = (q) => cached(origBufs, origKey(q), async () => {
+  const r = await fetch(`${BASE}api/vocametrix/original-audio?video_id=${q.videoId}&start=${q.start}&end=${q.end}`);
+  if (!r.ok) throw await apiErr(r);
+  return decode(await r.arrayBuffer());
+});
+const origWords = (q) => cached(origWordsCache, origKey(q) + "|" + q.text, async () => {
+  const fd = new FormData();
+  fd.append("video_id", q.videoId); fd.append("start", String(q.start)); fd.append("end", String(q.end));
+  fd.append("text", q.text); fd.append("lang", q.lang || "en");
+  const r = await fetch(`${BASE}api/vocametrix/original-words`, { method: "POST", body: fd });
+  if (!r.ok) throw await apiErr(r);
+  return (await r.json()).words;
+});
+
+async function apiErr(r) {
+  let d;
+  try { d = (await r.json()).detail; } catch { /* не JSON */ }
+  return new Error(d?.message || (typeof d === "string" ? d : `Сервер ответил ${r.status}`));
+}
+
+export function stopWord() {
+  playRun++;
+  try { curSrc?.stop(); } catch { /* уже остановлен */ }
+  curSrc = null;
+}
+
+function playSlice(buf, offset, duration) {
+  const a = Math.max(0, offset - 0.05);               // небольшой запас, чтобы не обрезать согласные
+  const d = Math.min(duration + 0.12, buf.duration - a);
+  return new Promise((resolve) => {
+    const src = getCtx().createBufferSource();
+    src.buffer = buf;
+    src.connect(getCtx().destination);
+    src.onended = resolve;
+    curSrc = src;
+    src.start(0, a, d);
+  });
+}
+
+function WordPlayer({ idx, word, userBlob, origReq }) {
+  const [busy, setBusy] = useState(null);
+  const [err, setErr] = useState("");
+  const hasMine = word.offset != null && word.duration != null;
+
+  async function play(mode) {
+    if (busy) { stopWord(); setBusy(null); return; }
+    getCtx().resume(); // iOS: разблокируем звук прямо в обработчике нажатия
+    stopWord();
+    const run = playRun;
+    setErr(""); setBusy(mode);
+    try {
+      for (const step of mode === "both" ? ["orig", "mine"] : [mode]) {
+        if (run !== playRun) return;
+        if (step === "mine") {
+          const b = await userBuffer(userBlob);
+          if (run === playRun) await playSlice(b, word.offset, word.duration);
+        } else {
+          const [words, b] = await Promise.all([origWords(origReq), origBuffer(origReq)]);
+          const o = words[idx];
+          if (!o || o.offset == null) throw new Error("Не удалось найти это слово в оригинале");
+          if (run === playRun) await playSlice(b, o.offset, o.duration);
+        }
+        if (mode === "both" && step === "orig") await new Promise((r) => setTimeout(r, 200));
+      }
+    } catch (e) {
+      setErr(e.message || "Не удалось воспроизвести");
+    } finally {
+      if (run === playRun) setBusy(null);
+    }
+  }
+
+  const label = (m, t) => (busy === m ? "■ Стоп" : t);
+  return (
+    <div className="wplay">
+      <button className="btn" disabled={!!busy && busy !== "orig"} onClick={() => play("orig")}>{label("orig", "▶ Оригинал")}</button>
+      <button className="btn" disabled={!hasMine || (!!busy && busy !== "mine")} onClick={() => play("mine")}>{label("mine", "▶ Моё")}</button>
+      <button className="btn" disabled={!hasMine || (!!busy && busy !== "both")} onClick={() => play("both")}>{label("both", "▶ Оба")}</button>
+      {!hasMine && <p className="hint">Слово пропущено в записи — можно послушать только оригинал.</p>}
+      {err && <p className="err">{err}</p>}
+    </div>
+  );
+}
+
 // Предложение с разметкой ошибок Vocametrix. Цвет дублируется подчёркиванием/зачёркиванием.
-export function AnnotatedSentence({ result }) {
+export function AnnotatedSentence({ result, userBlob, origReq }) {
   const [pick, setPick] = useState(null);
   const ins = {};
   result.insertions.forEach((x) => (ins[x.afterWord] = [...(ins[x.afterWord] || []), x.word]));
@@ -53,6 +156,7 @@ export function AnnotatedSentence({ result }) {
         <div className="wdetail">
           <b>{w.t.replace(/^[^\w']+|[^\w']+$/g, "")}</b>{" "}
           <span>{STATUS_LABEL[w.status]}{w.score != null && w.status !== "omission" ? ` · ${n0(w.score)}/100` : ""}</span>
+          <WordPlayer key={pick} idx={pick} word={w} userBlob={userBlob} origReq={origReq} />
           {w.phonemes?.length > 0 && (
             <div className="phones">
               {w.phonemes.map((p, k) => (

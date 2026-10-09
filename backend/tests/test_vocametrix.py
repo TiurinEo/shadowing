@@ -239,3 +239,29 @@ def test_local_rate_guard(env, webm3, monkeypatch):
     assert post_pron(c, webm3).status_code == 200      # ещё 2
     r = post_pron(c, webm3)
     assert r.status_code == 429 and r.json()["detail"]["code"] == "rate_limited" and r.json()["detail"]["retryAfter"] > 0
+
+
+def test_scores_directly_on_nbest_and_word_timing():
+    azure_rest = {"RecognitionStatus": "Success", "NBest": [{
+        "AccuracyScore": 91, "FluencyScore": 85, "CompletenessScore": 100, "PronScore": 90, "ProsodyScore": 77,
+        "Words": [{"Word": "you", "Offset": 5900000, "Duration": 1300000, "AccuracyScore": 80, "ErrorType": "None",
+                   "Phonemes": [{"Phoneme": "j", "AccuracyScore": 70}]}]}]}
+    v = pronunciation_view(azure_rest, "You", "en-US")
+    assert v["scores"] == {"accuracy": 91, "fluency": 85, "completeness": 100, "prosody": 77, "pron": 90}
+    w = v["words"][0]
+    assert w["score"] == 80 and w["offset"] == pytest.approx(0.59) and w["duration"] == pytest.approx(0.13)
+    assert w["phonemes"] == [{"p": "j", "s": 70}]
+    # корень без NBest и вложенность в произвольное место
+    assert pronunciation_view({"result": {"PronScore": 55}, "RecognitionStatus": "Success"}, "You", "en-US")["scores"]["pron"] == 55
+
+
+def test_original_audio_and_words(env, monkeypatch):
+    c, fake = env
+    r = c.get("/api/vocametrix/original-audio", params={"video_id": "abcdefghijk", "start": 1, "end": 4})
+    assert r.status_code == 200 and r.content[:4] == b"RIFF"
+    d = {"video_id": "abcdefghijk", "start": "1", "end": "4", "text": TEXT, "lang": "en"}
+    j = c.post("/api/vocametrix/original-words", data=d).json()
+    assert len(j["words"]) == 5 and j["words"][0]["offset"] == pytest.approx(0.5)
+    n = len(fake.calls)
+    c.post("/api/vocametrix/original-words", data=d)      # второй раз — из кэша, без запросов к API
+    assert len(fake.calls) == n

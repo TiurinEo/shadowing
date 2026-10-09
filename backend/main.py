@@ -11,16 +11,13 @@ from fastapi.staticfiles import StaticFiles
 from youtube_transcript_api import YouTubeTranscriptApi
 
 from diffcheck import compare
+from subtitles import merge_to_sentences
 from vocametrix_routes import router as vocametrix_router
 
 app = FastAPI()
 app.include_router(vocametrix_router)
 
 ID_RE = re.compile(r"(?:v=|youtu\.be/|embed/|shorts/)([\w-]{11})")
-END_PUNCT = (".", "?", "!", "…", "。", "？", "！")
-MAX_CHARS = 140   # для автосубтитров без пунктуации
-MAX_SEC = 8.0
-GAP_SEC = 1.0
 
 
 def extract_id(url: str) -> str:
@@ -30,41 +27,6 @@ def extract_id(url: str) -> str:
     if not m:
         raise HTTPException(400, "Не похоже на ссылку YouTube")
     return m.group(1)
-
-
-def merge_to_sentences(snippets):
-    sentences, buf, start, end = [], [], None, None
-
-    def flush():
-        nonlocal buf, start, end
-        if buf:
-            text = re.sub(r"\s+", " ", " ".join(buf)).strip()
-            if text:
-                sentences.append({"start": round(start, 2), "end": round(end, 2), "text": text})
-        buf, start, end = [], None, None
-
-    for s in snippets:
-        text = s["text"].replace("\n", " ").strip()
-        if not text or text.startswith("[") and text.endswith("]"):  # [Music] и т.п.
-            continue
-        s_start, s_end = s["start"], s["start"] + s["duration"]
-        if buf and s_start - end > GAP_SEC:
-            flush()
-        if start is None:
-            start = s_start
-        buf.append(text)
-        end = s_end
-        joined = " ".join(buf)
-        if joined.endswith(END_PUNCT) or len(joined) > MAX_CHARS or end - start > MAX_SEC:
-            flush()
-    flush()
-
-    # конец предложения не должен залезать на начало следующего
-    for a, b in zip(sentences, sentences[1:]):
-        a["end"] = round(min(a["end"], b["start"]), 2)
-    for i, s in enumerate(sentences):
-        s["id"] = i
-    return sentences
 
 
 def fetch_title(video_id: str) -> str:
