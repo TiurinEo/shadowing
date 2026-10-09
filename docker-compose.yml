@@ -6,11 +6,14 @@ services:
     mem_limit: 700m
     env_file:
       - ./backend/.env
+    environment:
+      ORIGINAL_AUDIO_DIR: /cache/original
     expose:
       - "8000"
     volumes:
       - ./models:/models:ro
       - hf-cache:/root/.cache/huggingface
+      - orig-audio:/cache/original
 
   caddy:
     image: caddy:2
@@ -25,5 +28,6 @@ services:
       - shadowing
 volumes:
   hf-cache:
+  orig-audio:
   
   

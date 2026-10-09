@@ -3,3 +3,6 @@ uvicorn[standard]
 youtube-transcript-api>=1.0
 python-multipart
 faster-whisper
+httpx==0.28.1
+av==18.1.0
+yt-dlp==2026.8.19

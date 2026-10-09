@@ -11,8 +11,10 @@ from fastapi.staticfiles import StaticFiles
 from youtube_transcript_api import YouTubeTranscriptApi
 
 from diffcheck import compare
+from vocametrix_routes import router as vocametrix_router
 
 app = FastAPI()
+app.include_router(vocametrix_router)
 
 ID_RE = re.compile(r"(?:v=|youtu\.be/|embed/|shorts/)([\w-]{11})")
 END_PUNCT = (".", "?", "!", "…", "。", "？", "！")

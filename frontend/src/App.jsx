@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import VocametrixPanel, { AnnotatedSentence } from "./Analysis.jsx";
 
 // ---------- YouTube IFrame API ----------
 let ytReady;
@@ -46,12 +47,15 @@ export default function App() {
   const [recs, setRecs] = useState({}); // id -> { url, blob }
   const [cmode, setCmode] = useState(null); // какой вариант Compare сейчас играет
   const [checks, setChecks] = useState({}); // id -> { loading | result | error }
+  const [vmState, setVmState] = useState({}); // id -> { pron, pros }: каждый { loading | result | error }
+  const [vmStatus, setVmStatus] = useState(null); // настройки и остаток лимита с backend
 
   const playerRef = useRef(null);
   const timerRef = useRef(null);
   const runRef = useRef(0); // «номер запуска»: отмена увеличивает его
   const cancelRef = useRef(null);
   const checkSeq = useRef({}); // id -> номер последней проверки
+  const vmSeq = useRef({}); // "id:pron" | "id:pros" -> номер последнего анализа Vocametrix
   const recorderRef = useRef(null);
   const audioRef = useRef(null);
   const listRef = useRef(null);
@@ -86,7 +90,7 @@ export default function App() {
       if (!r.ok) throw new Error(j.detail || "Ошибка");
       if (!j.sentences.length) throw new Error("Субтитры пустые");
       setPlayerErr("");
-      setData(j);
+      setData({ ...j, lang: l });
       const prev = history.find((h) => h.videoId === j.videoId);
       const start = Math.min(prev?.idx ?? 0, j.sentences.length - 1);
       updateHistory((h) => [
@@ -96,6 +100,7 @@ export default function App() {
       setIdx(start);
       setRecs({});
       setChecks({});
+      setVmState({});
     } catch (err) {
       setError(err.message);
     } finally {
@@ -203,6 +208,7 @@ export default function App() {
           return { ...r, [id]: { url: URL.createObjectURL(blob), blob } };
         });
         setStatus("idle");
+        dropVm(id); // результаты Vocametrix относятся к прежней записи
         runCheck(id, blob, text); // сразу отправляем на проверку
       };
       recorderRef.current = rec;
@@ -289,6 +295,64 @@ export default function App() {
     } catch (e) {
       if (fresh()) setChecks((c) => ({ ...c, [id]: { error: e.message } }));
     }
+  }
+
+  // ---------- Vocametrix ----------
+  async function loadVmStatus() {
+    try {
+      const r = await fetch(`${import.meta.env.BASE_URL}api/vocametrix/status`);
+      if (r.ok) setVmStatus(await r.json());
+    } catch { /* статус необязателен */ }
+  }
+  useEffect(() => { loadVmStatus(); }, []);
+
+  function dropVm(id) {
+    vmSeq.current[id + ":pron"] = (vmSeq.current[id + ":pron"] || 0) + 1; // устаревшие ответы игнорируем
+    vmSeq.current[id + ":pros"] = (vmSeq.current[id + ":pros"] || 0) + 1;
+    setVmState((s) => { const { [id]: _, ...rest } = s; return rest; });
+  }
+
+  async function vmRequest(kind, fd) {
+    const r = await fetch(`${import.meta.env.BASE_URL}api/vocametrix/${kind === "pron" ? "pronunciation" : "prosody"}`, { method: "POST", body: fd });
+    const raw = await r.text();
+    let j = {};
+    try { j = JSON.parse(raw); } catch { /* не JSON */ }
+    if (!r.ok) {
+      const d = j.detail;
+      if (d && typeof d === "object") throw d;
+      throw { message: typeof d === "string" ? d : r.status === 413 ? "Запись слишком большая для загрузки" : `Сервер ответил ${r.status}`, retryable: r.status !== 413 };
+    }
+    return j;
+  }
+
+  async function runVm(kind) {
+    const rec = recs[cur.id];
+    if (!rec) return;
+    const { id, text, start, end } = cur;
+    const kinds = kind === "both" ? ["pron", "pros"] : [kind];
+    await Promise.all(kinds.map(async (k) => {
+      const key = id + ":" + k;
+      const seq = (vmSeq.current[key] = (vmSeq.current[key] || 0) + 1);
+      const fresh = () => vmSeq.current[key] === seq;
+      const put = (v) => fresh() && setVmState((s) => ({ ...s, [id]: { ...s[id], [k]: v } }));
+      put({ loading: true });
+      try {
+        const fd = new FormData();
+        fd.append("audio", rec.blob, "rec." + (rec.blob.type.includes("mp4") ? "mp4" : "webm"));
+        if (k === "pron") {
+          fd.append("text", text);
+          fd.append("lang", (data.lang || "en").trim());
+        } else {
+          fd.append("video_id", data.videoId);
+          fd.append("start", String(start));
+          fd.append("end", String(end));
+        }
+        put({ result: await vmRequest(k, fd) });
+      } catch (e) {
+        put({ error: { message: e?.message || "Не удалось выполнить анализ", retryable: e?.retryable ?? true, code: e?.code, retryAfter: e?.retryAfter } });
+      }
+    }));
+    loadVmStatus();
   }
 
   function check() {
@@ -381,6 +445,7 @@ export default function App() {
 
   const rec = recs[cur.id];
   const chk = checks[cur.id];
+  const vmr = vmState[cur.id];
   const changed = cur.os !== undefined && (cur.start !== cur.os || cur.end !== cur.oe);
   const busy = status !== "idle";
 
@@ -402,11 +467,15 @@ export default function App() {
       )}
 
       <section className="card">
-        <p className="sentence">
-          {chk?.result
-            ? chk.result.words.map((w, i) => <span key={i} className={"w-" + w.s}>{w.t} </span>)
-            : cur.text}
-        </p>
+        {vmr?.pron?.result ? (
+          <AnnotatedSentence key={cur.id} result={vmr.pron.result} />
+        ) : (
+          <p className="sentence">
+            {chk?.result
+              ? chk.result.words.map((w, i) => <span key={i} className={"w-" + w.s}>{w.t} </span>)
+              : cur.text}
+          </p>
+        )}
       </section>
 
       <details className="panel trim">
@@ -464,6 +533,8 @@ export default function App() {
         )}
         {chk?.error && <p className="err">{chk.error}</p>}
       </section>
+
+      <VocametrixPanel status={vmStatus} state={vmr} hasRecording={!!rec} busy={busy} onRun={runVm} />
 
       {error && <p className="err">{error}</p>}
 
