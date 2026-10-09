@@ -88,3 +88,12 @@ input { width: 100%; padding: 14px; border: 1px solid var(--line); border-radius
 .btn.wide { width: 100%; font-size: 16px; }
 .hint { margin: 8px 0 0; font-size: 13px; color: var(--mute); }
 .panel .verdict { margin: 12px 2px 0; }
+
+/* --- подгонка границ --- */
+.trim summary { cursor: pointer; font-size: 15px; line-height: 1.35; list-style: none; }
+.trim summary::-webkit-details-marker { display: none; }
+.trim[open] summary { margin-bottom: 12px; }
+.trimrow { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 8px; align-items: center; margin-bottom: 8px; }
+.lbl { display: grid; font-size: 15px; }
+.lbl small { color: var(--mute); font-variant-numeric: tabular-nums; }
+.btn.reset { width: 100%; margin-top: 8px; }

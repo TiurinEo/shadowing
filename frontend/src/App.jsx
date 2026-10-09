@@ -30,6 +30,7 @@ function persistHistory(h) {
   try { localStorage.setItem(HKEY, JSON.stringify(h)); } catch { /* приватный режим */ }
 }
 
+const fmt1 = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, "0")}`;
 const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 
 export default function App() {
@@ -295,12 +296,33 @@ export default function App() {
     setIdx(i);
   }
 
-  function nudge(key, d) {
+  // Сдвиг границы фразы + короткий предпросмотр изменённого края
+  async function nudge(key, d) {
+    const id = cur.id;
+    let { start, end } = cur;
+    if (key === "start") start = Math.min(Math.max(0, +(start + d).toFixed(2)), end - 0.4);
+    else end = Math.max(+(end + d).toFixed(2), start + 0.4);
     setData((prev) => ({
       ...prev,
       sentences: prev.sentences.map((s) =>
-        s.id === cur.id ? { ...s, [key]: Math.max(0, +(s[key] + d).toFixed(2)) } : s
+        s.id === id ? { ...s, start, end, os: s.os ?? s.start, oe: s.oe ?? s.end } : s
       ),
+    }));
+    stopAll();
+    const token = runRef.current;
+    setStatus("listening");
+    await playOriginal(
+      key === "start"
+        ? { start, end: Math.min(end, start + 1.5) }   // начало фразы
+        : { start: Math.max(start, end - 1.5), end }   // конец фразы
+    );
+    if (token === runRef.current) setStatus("idle");
+  }
+
+  function resetBounds() {
+    setData((prev) => ({
+      ...prev,
+      sentences: prev.sentences.map((s) => (s.id === cur.id && s.os !== undefined ? { ...s, start: s.os, end: s.oe } : s)),
     }));
   }
 
@@ -353,6 +375,7 @@ export default function App() {
 
   const rec = recs[cur.id];
   const chk = checks[cur.id];
+  const changed = cur.os !== undefined && (cur.start !== cur.os || cur.end !== cur.oe);
   const busy = status !== "idle";
 
   return (
@@ -378,14 +401,20 @@ export default function App() {
             ? chk.result.words.map((w, i) => <span key={i} className={"w-" + w.s}>{w.t} </span>)
             : cur.text}
         </p>
-        <div className="nudge">
-          <span>{fmt(cur.start)}–{fmt(cur.end)}</span>
-          <button className="ghost" onClick={() => nudge("start", -0.3)}>начало −</button>
-          <button className="ghost" onClick={() => nudge("start", 0.3)}>+</button>
-          <button className="ghost" onClick={() => nudge("end", -0.3)}>конец −</button>
-          <button className="ghost" onClick={() => nudge("end", 0.3)}>+</button>
-        </div>
       </section>
+
+      <details className="panel trim">
+        <summary>✂ Фраза обрезана или лишнее слово? Подогнать границы</summary>
+        {[["start", "Начало"], ["end", "Конец"]].map(([key, label]) => (
+          <div className="trimrow" key={key}>
+            <span className="lbl">{label}<small>{fmt1(cur[key])}</small></span>
+            <button className="btn" disabled={status === "recording" || status === "comparing"} onClick={() => nudge(key, -0.2)}>◀ раньше</button>
+            <button className="btn" disabled={status === "recording" || status === "comparing"} onClick={() => nudge(key, 0.2)}>позже ▶</button>
+          </div>
+        ))}
+        <p className="hint">После каждого нажатия проигрывается кусочек, чтобы сразу проверить.</p>
+        {changed && <button className="btn reset" onClick={resetBounds}>Сбросить границы</button>}
+      </details>
 
       <section className="steps two">
         <button onClick={listen} disabled={status === "recording" || status === "comparing"} className={status === "listening" ? "active" : ""}>
