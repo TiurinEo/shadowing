@@ -64,6 +64,18 @@ def merge_to_sentences(snippets):
     return sentences
 
 
+def fetch_title(video_id: str) -> str:
+    try:
+        import json
+        import urllib.request
+
+        u = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+        with urllib.request.urlopen(u, timeout=5) as r:
+            return json.load(r).get("title", "")
+    except Exception:
+        return ""
+
+
 @lru_cache(maxsize=256)
 def load(video_id: str, lang: str):
     api = YouTubeTranscriptApi()
@@ -76,6 +88,7 @@ def load(video_id: str, lang: str):
     snippets = [{"text": x.text, "start": x.start, "duration": x.duration} for x in fetched]
     return {
         "videoId": video_id,
+        "title": fetch_title(video_id),
         "generated": t.is_generated,
         "sentences": merge_to_sentences(snippets),
     }
@@ -95,14 +108,12 @@ def transcript(url: str, lang: str = "en"):
 @lru_cache(maxsize=1)
 def get_model():
     from faster_whisper import WhisperModel
-
     return WhisperModel(
-        r"C:\Users\tyuri\Documents\shadowing\models\faster-whisper-base",
+        os.getenv("WHISPER_MODEL", "base"),
         device="cpu",
         compute_type="int8",
     )
-
-
+   
 @app.post("/api/check")
 def check_pronunciation(audio: UploadFile = File(...), text: str = Form(...), lang: str = Form("en")):
     data = audio.file.read()

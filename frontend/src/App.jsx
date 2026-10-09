@@ -22,6 +22,14 @@ function pickMime() {
   return "";
 }
 
+const HKEY = "shadowing:history";
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(HKEY)) || []; } catch { return []; }
+}
+function persistHistory(h) {
+  try { localStorage.setItem(HKEY, JSON.stringify(h)); } catch { /* приватный режим */ }
+}
+
 const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 
 export default function App() {
@@ -32,6 +40,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [playerErr, setPlayerErr] = useState("");
+  const [history, setHistory] = useState(loadHistory); // [{ videoId, url, lang, title, idx, ts }]
   const [status, setStatus] = useState("idle"); // idle | listening | recording | comparing
   const [recs, setRecs] = useState({}); // id -> { url, blob }
   const [checks, setChecks] = useState({}); // id -> { loading | result | error }
@@ -46,18 +55,40 @@ export default function App() {
   const cur = sentences[idx];
 
   // ---------- загрузка субтитров ----------
-  async function load(e) {
+  function updateHistory(fn) {
+    setHistory((h) => {
+      const n = fn(h);
+      persistHistory(n);
+      return n;
+    });
+  }
+
+  function removeItem(videoId) {
+    updateHistory((h) => h.filter((x) => x.videoId !== videoId));
+  }
+
+  function load(e) {
     e.preventDefault();
+    return open(url, lang);
+  }
+
+  async function open(u, l) {
     setError("");
     setLoading(true);
     try {
-      const r = await fetch(`/api/transcript?url=${encodeURIComponent(url)}&lang=${lang}`);
+      const r = await fetch(`${import.meta.env.BASE_URL}api/transcript?url=${encodeURIComponent(u)}&lang=${l}`);
       const j = await r.json();
       if (!r.ok) throw new Error(j.detail || "Ошибка");
       if (!j.sentences.length) throw new Error("Субтитры пустые");
       setPlayerErr("");
       setData(j);
-      setIdx(0);
+      const prev = history.find((h) => h.videoId === j.videoId);
+      const start = Math.min(prev?.idx ?? 0, j.sentences.length - 1);
+      updateHistory((h) => [
+        { videoId: j.videoId, url: u, lang: l, title: j.title || prev?.title || "", idx: start, ts: Date.now() },
+        ...h.filter((x) => x.videoId !== j.videoId),
+      ].slice(0, 30));
+      setIdx(start);
       setRecs({});
       setChecks({});
     } catch (err) {
@@ -86,6 +117,12 @@ export default function App() {
       playerRef.current = null;
     };
   }, [data?.videoId]);
+
+  // запоминаем, на какой фразе остановились
+  useEffect(() => {
+    if (!data) return;
+    updateHistory((h) => h.map((x) => (x.videoId === data.videoId ? { ...x, idx } : x)));
+  }, [idx, data?.videoId]);
 
   useEffect(() => {
     listRef.current?.querySelector(".on")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -209,7 +246,7 @@ export default function App() {
       fd.append("audio", r0.blob, "rec." + (r0.blob.type.includes("mp4") ? "mp4" : "webm"));
       fd.append("text", cur.text);
       fd.append("lang", lang.split("-")[0]);
-      const r = await fetch("/api/check", { method: "POST", body: fd });
+      const r = await fetch(`${import.meta.env.BASE_URL}api/check`, { method: "POST", body: fd });
       const j = await r.json();
       if (!r.ok) throw new Error(j.detail || "Ошибка проверки");
       setChecks((c) => ({ ...c, [id]: { result: j } }));
@@ -258,6 +295,25 @@ export default function App() {
           </button>
         </form>
         {error && <p className="err">{error}</p>}
+        {history.length > 0 && (
+          <section className="hist">
+            <h2>Недавние</h2>
+            <ul>
+              {history.map((h) => (
+                <li key={h.videoId}>
+                  <button className="item" onClick={() => open(h.url, h.lang)} disabled={loading}>
+                    <img src={`https://i.ytimg.com/vi/${h.videoId}/mqdefault.jpg`} alt="" loading="lazy" />
+                    <span>
+                      <b>{h.title || h.videoId}</b>
+                      <small>{h.lang} · фраза {h.idx + 1}</small>
+                    </span>
+                  </button>
+                  <button className="ghost" aria-label="Удалить" onClick={() => removeItem(h.videoId)}>×</button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
       </main>
     );
   }
