@@ -51,6 +51,7 @@ export default function App() {
   const timerRef = useRef(null);
   const runRef = useRef(0); // «номер запуска»: отмена увеличивает его
   const cancelRef = useRef(null);
+  const checkSeq = useRef({}); // id -> номер последней проверки
   const recorderRef = useRef(null);
   const audioRef = useRef(null);
   const listRef = useRef(null);
@@ -191,6 +192,7 @@ export default function App() {
       const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
       const chunks = [];
       const id = cur.id;
+      const text = cur.text;
       rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
       rec.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
@@ -200,8 +202,8 @@ export default function App() {
           if (r[id]) URL.revokeObjectURL(r[id].url);
           return { ...r, [id]: { url: URL.createObjectURL(blob), blob } };
         });
-        setChecks((c) => { const n = { ...c }; delete n[id]; return n; });
         setStatus("idle");
+        runCheck(id, blob, text); // сразу отправляем на проверку
       };
       recorderRef.current = rec;
       rec.start();
@@ -267,14 +269,14 @@ export default function App() {
   }
 
   // ---------- Whisper ----------
-  async function check() {
-    const id = cur.id;
-    const r0 = recs[id];
+  async function runCheck(id, blob, text) {
+    const seq = (checkSeq.current[id] = (checkSeq.current[id] || 0) + 1);
+    const fresh = () => checkSeq.current[id] === seq; // игнорируем устаревшие ответы
     setChecks((c) => ({ ...c, [id]: { loading: true } }));
     try {
       const fd = new FormData();
-      fd.append("audio", r0.blob, "rec." + (r0.blob.type.includes("mp4") ? "mp4" : "webm"));
-      fd.append("text", cur.text);
+      fd.append("audio", blob, "rec." + (blob.type.includes("mp4") ? "mp4" : "webm"));
+      fd.append("text", text);
       fd.append("lang", lang.split("-")[0]);
       const r = await fetch(`${import.meta.env.BASE_URL}api/check`, { method: "POST", body: fd });
       const raw = await r.text();
@@ -283,10 +285,14 @@ export default function App() {
       if (!r.ok || !raw) {
         throw new Error(j.detail || `Сервер ответил ${r.status}${raw ? "" : " без текста"}. Смотрите логи: docker compose logs shadowing`);
       }
-      setChecks((c) => ({ ...c, [id]: { result: j } }));
+      if (fresh()) setChecks((c) => ({ ...c, [id]: { result: j } }));
     } catch (e) {
-      setChecks((c) => ({ ...c, [id]: { error: e.message } }));
+      if (fresh()) setChecks((c) => ({ ...c, [id]: { error: e.message } }));
     }
+  }
+
+  function check() {
+    runCheck(cur.id, recs[cur.id].blob, cur.text);
   }
 
   function go(i) {
@@ -448,7 +454,7 @@ export default function App() {
       <section className={"panel" + (rec ? "" : " off")}>
         <h3>Проверка произношения</h3>
         <button className="btn wide" disabled={!rec || busy || chk?.loading} onClick={check}>
-          {chk?.loading ? "Слушаю…" : "Проверить через Whisper"}
+          {chk?.loading ? "Слушаю…" : chk ? "Проверить ещё раз" : "Проверить через Whisper"}
         </button>
         {chk?.result && (
           <div className="verdict">

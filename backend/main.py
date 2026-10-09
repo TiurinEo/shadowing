@@ -1,6 +1,7 @@
 import io
 import os
 import re
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -105,25 +106,27 @@ def transcript(url: str, lang: str = "en"):
         raise HTTPException(404, f"Не удалось получить субтитры ({lang}): {type(e).__name__}")
 
 
+# На слабом сервере считаем по одной записи за раз, остальные ждут в очереди
+_whisper_lock = threading.Lock()
+
+
 @lru_cache(maxsize=1)
 def get_model():
-    from faster_whisper import WhisperModel
-    return WhisperModel(
-        os.getenv("WHISPER_MODEL", "base"),
-        device="cpu",
-        compute_type="int8",
-    )
-   
+    from faster_whisper import WhisperModel  # модель скачается при первом запуске
+    return WhisperModel(os.getenv("WHISPER_MODEL", "base"), device="cpu", compute_type="int8")
+
+
 @app.post("/api/check")
 def check_pronunciation(audio: UploadFile = File(...), text: str = Form(...), lang: str = Form("en")):
     data = audio.file.read()
     if len(data) < 1000:
         raise HTTPException(400, "Запись слишком короткая")
     try:
-        segs, _ = get_model().transcribe(
-            io.BytesIO(data), language=lang or None, beam_size=5, condition_on_previous_text=False
-        )
-        heard = " ".join(x.text.strip() for x in segs).strip()
+        with _whisper_lock:
+            segs, _ = get_model().transcribe(
+                io.BytesIO(data), language=lang or None, beam_size=1, condition_on_previous_text=False
+            )
+            heard = " ".join(x.text.strip() for x in segs).strip()
     except Exception as e:
         raise HTTPException(500, f"Whisper: {type(e).__name__}: {str(e)[:200]}")
     return {"heard": heard, **compare(text, heard)}
