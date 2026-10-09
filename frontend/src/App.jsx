@@ -276,8 +276,12 @@ export default function App() {
       fd.append("text", cur.text);
       fd.append("lang", lang.split("-")[0]);
       const r = await fetch(`${import.meta.env.BASE_URL}api/check`, { method: "POST", body: fd });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.detail || "Ошибка проверки");
+      const raw = await r.text();
+      let j = {};
+      try { j = JSON.parse(raw); } catch { /* пустой или не-JSON ответ */ }
+      if (!r.ok || !raw) {
+        throw new Error(j.detail || `Сервер ответил ${r.status}${raw ? "" : " без текста"}. Смотрите логи: docker compose logs shadowing`);
+      }
       setChecks((c) => ({ ...c, [id]: { result: j } }));
     } catch (e) {
       setChecks((c) => ({ ...c, [id]: { error: e.message } }));
